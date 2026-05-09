@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.Python
+env/
+venv/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Логи и данные
+*.log
+*.db
+*.db-journal
+/srv/
+
+# Конфиги с паролями
+.env
+*.key
+*.pem
+*.crt
+config/local.yaml
+
+# OS
+.DS_Store
+Thumbs.db
