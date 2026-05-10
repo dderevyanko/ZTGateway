@@ -30,3 +30,5 @@ config/local.yaml
 .DS_Store
 Thumbs.db
 venv/
+run.sh
+*.egg-info/
