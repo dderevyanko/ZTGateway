@@ -1,6 +1,21 @@
 #!/usr/bin/env python3
+"""
+ZTGateway CLI - Zero Touch Provisioning Gateway
+DHCP server for IP phones provisioning
+"""
+
+import argparse
 import socket
+import sys
+from typing import Optional, Tuple
 from .dhcp import parse_dhcp_packet
+
+# ---------------------------
+# Конфигурация
+# ---------------------------
+DEFAULT_PORT = 67
+DEFAULT_RCVBUF = 262144  # 256KB буфер для высокой нагрузки
+DEFAULT_INTERFACE = "all"
 
 # DHCP message type names
 DHCP_MSG_NAMES = {
@@ -11,27 +26,145 @@ DHCP_MSG_NAMES = {
     5: "DHCPACK",
     6: "DHCPNAK",
     7: "DHCPRELEASE",
-    8: "DHCPINFORM"
+    8: "DHCPINFORM",
 }
 
-def main():
-    print("ZTGateway – first step: listening for DHCP")
+# Lazy-импорт netifaces (только по необходимости)
+_netifaces = None
+
+
+def _get_netifaces():
+    """Lazy load netifaces module"""
+    global _netifaces
+    if _netifaces is None:
+        try:
+            import netifaces
+            _netifaces = netifaces
+        except ImportError:
+            return None
+    return _netifaces
+
+
+def get_interface_ip(interface_name: str) -> Optional[str]:
+    """Get IP address of a network interface"""
+    netifaces = _get_netifaces()
+    if netifaces is None:
+        return None
+    try:
+        addrs = netifaces.ifaddresses(interface_name)
+        return addrs[netifaces.AF_INET][0]["addr"]
+    except (KeyError, ValueError, IndexError):
+        return None
+
+
+def list_interfaces() -> None:
+    """Print available network interfaces"""
+    netifaces = _get_netifaces()
+    if netifaces is None:
+        print("netifaces not installed. Install with: pip install netifaces")
+        return
+    print("Available network interfaces:")
+    for iface in netifaces.interfaces():
+        ip = get_interface_ip(iface)
+        if ip:
+            print(f"  {iface} (IP: {ip})")
+        else:
+            print(f"  {iface} (no IP)")
+
+
+def create_socket(interface_name: str, port: int, rcvbuf: int) -> socket.socket:
+    """Create and bind socket to specified interface"""
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.bind(("", 67))
+    # Доп. оптимизации
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, rcvbuf)
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+    except AttributeError:
+        pass  # не поддерживается на macOS/Windows
 
-    while True:
-        data, client = sock.recvfrom(1024)
-        mac, msg_type, hostname = parse_dhcp_packet(data)
-        
-        if mac is not None and msg_type is not None:
-            msg_name = DHCP_MSG_NAMES.get(msg_type, f"UNKNOWN({msg_type})")
-            if hostname:
-                print(f"Received packet from {mac}, type={msg_name}, hostname={hostname}")
+    if interface_name == "all":
+        sock.bind(("", port))
+        print(f"Listening on ALL interfaces, port {port}")
+    else:
+        ip = get_interface_ip(interface_name)
+        if not ip:
+            raise ValueError(f"Interface {interface_name} has no IP address")
+        sock.bind((ip, port))
+        print(f"Listening on interface {interface_name} (IP: {ip}), port {port}")
+    return sock
+
+
+def format_packet_info(
+    mac: str, msg_type: int, hostname: Optional[str], client: Tuple[str, int]
+) -> str:
+    """Format packet information for logging"""
+    msg_name = DHCP_MSG_NAMES.get(msg_type, f"UNKNOWN({msg_type})")
+    base = f"Received from {mac}, type={msg_name}"
+    if hostname:
+        base += f", hostname={hostname}"
+    return f"{base}, src={client}"
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="ZTGateway – Zero Touch Provisioning Gateway"
+    )
+    parser.add_argument(
+        "-i", "--interface",
+        default=DEFAULT_INTERFACE,
+        help=f"Network interface to listen on (default: {DEFAULT_INTERFACE})"
+    )
+    parser.add_argument(
+        "-p", "--port",
+        type=int,
+        default=DEFAULT_PORT,
+        help=f"DHCP port (default: {DEFAULT_PORT})"
+    )
+    parser.add_argument(
+        "--rcvbuf",
+        type=int,
+        default=DEFAULT_RCVBUF,
+        help=f"Socket receive buffer size (default: {DEFAULT_RCVBUF})"
+    )
+    parser.add_argument(
+        "--list-interfaces",
+        action="store_true",
+        help="Show available network interfaces and exit"
+    )
+    args = parser.parse_args()
+
+    if args.list_interfaces:
+        list_interfaces()
+        return
+
+    print(f"ZTGateway – starting on interface: {args.interface}, port {args.port}")
+
+    try:
+        sock = create_socket(args.interface, args.port, args.rcvbuf)
+    except Exception as e:
+        print(f"Error: {e}")
+        list_interfaces()
+        return
+
+    print("Listening for DHCP requests...")
+    print("Press Ctrl+C to stop\n")
+
+    try:
+        while True:
+            data, client = sock.recvfrom(1024)
+            mac, msg_type, hostname = parse_dhcp_packet(data)
+            if mac is not None and msg_type is not None:
+                print(format_packet_info(mac, msg_type, hostname, client))
             else:
-                print(f"Received packet from {mac}, type={msg_name}")
-        else:
-            print("Received unparsable packet")
+                print("Received unparsable packet")
+    except KeyboardInterrupt:
+        print("\n\nZTGateway stopped by user")
+    except Exception as e:
+        print(f"\nUnexpected error: {e}")
+    finally:
+        sock.close()
+
 
 if __name__ == "__main__":
     main()
