@@ -146,7 +146,7 @@ def main() -> None:
     )
     parser.add_argument(
         "-i", "--interface",
-        default=None,  # ← теперь None означает "интерактивный выбор"
+        default=None,
         help="Network interface to listen on (e.g., eth0, enx00e04c150bdf, all)"
     )
     parser.add_argument(
@@ -186,8 +186,36 @@ def main() -> None:
         print(f"Non-interactive mode: using '{interface}'")
     else:
         interface = interactive_interface_selection()
-    
-    # ... остальной код (создание сокета, цикл и т.д.)
+        if interface is None:
+            print("No interface selected. Exiting.")
+            return
+
+    print(f"ZTGateway – starting on interface: {interface}, port {args.port}")
+
+    try:
+        sock = create_socket(interface, args.port, args.rcvbuf)
+    except Exception as e:
+        print(f"Error: {e}")
+        list_interfaces()
+        return
+
+    print("Listening for DHCP requests...")
+    print("Press Ctrl+C to stop\n")
+
+    try:
+        while True:
+            data, client = sock.recvfrom(1024)
+            mac, msg_type, hostname = parse_dhcp_packet(data)
+            if mac is not None and msg_type is not None:
+                print(format_packet_info(mac, msg_type, hostname, client))
+            else:
+                print("Received unparsable packet")
+    except KeyboardInterrupt:
+        print("\n\nZTGateway stopped by user")
+    except Exception as e:
+        print(f"\nUnexpected error: {e}")
+    finally:
+        sock.close()
 
 
 if __name__ == "__main__":
