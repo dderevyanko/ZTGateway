@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ztgateway"
+version = "0.2.0"
+description = "Zero Touch Provisioning Gateway"
+authors = [{name = "Danila Derevyanko"}]
+
+[project.scripts]
+ztgateway = "ztgateway.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"][build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ztgateway"
+version = "0.2.0"
+description = "Zero Touch Provisioning Gateway"
+authors = [{name = "Danila Derevyanko"}]
+
+[project.scripts]
+ztgateway = "ztgateway.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

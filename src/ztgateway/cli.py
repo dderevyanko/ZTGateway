@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import socket
-from core.dhcp_protocol import parse_dhcp_packet
+from .dhcp import parse_dhcp_packet
 
 # DHCP message type names
 DHCP_MSG_NAMES = {
