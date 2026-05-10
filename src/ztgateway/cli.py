@@ -105,6 +105,40 @@ def format_packet_info(
         base += f", hostname={hostname}"
     return f"{base}, src={client}"
 
+def interactive_interface_selection() -> str:
+    """Interactive selection of network interface"""
+    netifaces = _get_netifaces()
+    if netifaces is None:
+        print("netifaces not installed. Using default 'all'.")
+        return "all"
+    
+    interfaces = []
+    print("\nAvailable network interfaces:")
+    for iface in netifaces.interfaces():
+        ip = get_interface_ip(iface)
+        if ip:
+            print(f"  {len(interfaces)+1}) {iface} (IP: {ip})")
+            interfaces.append(iface)
+        else:
+            print(f"  {iface} (no IP) - skipped")
+    
+    if not interfaces:
+        print("No interfaces with IP found. Using 'all'.")
+        return "all"
+    
+    print(f"  {len(interfaces)+1}) all (listen on all interfaces)")
+    
+    while True:
+        try:
+            choice = input(f"\nSelect interface (1-{len(interfaces)+1}): ").strip()
+            if choice == str(len(interfaces)+1):
+                return "all"
+            idx = int(choice) - 1
+            if 0 <= idx < len(interfaces):
+                return interfaces[idx]
+            print(f"Invalid choice. Enter 1-{len(interfaces)+1}")
+        except ValueError:
+            print(f"Please enter a number (1-{len(interfaces)+1})")
 
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -112,8 +146,8 @@ def main() -> None:
     )
     parser.add_argument(
         "-i", "--interface",
-        default=DEFAULT_INTERFACE,
-        help=f"Network interface to listen on (default: {DEFAULT_INTERFACE})"
+        default=None,  # ← теперь None означает "интерактивный выбор"
+        help="Network interface to listen on (e.g., eth0, enx00e04c150bdf, all)"
     )
     parser.add_argument(
         "-p", "--port",
@@ -132,38 +166,28 @@ def main() -> None:
         action="store_true",
         help="Show available network interfaces and exit"
     )
+    parser.add_argument(
+        "-y", "--non-interactive",
+        action="store_true",
+        help="Disable interactive mode (use default 'all')"
+    )
     args = parser.parse_args()
 
     if args.list_interfaces:
         list_interfaces()
         return
 
-    print(f"ZTGateway – starting on interface: {args.interface}, port {args.port}")
-
-    try:
-        sock = create_socket(args.interface, args.port, args.rcvbuf)
-    except Exception as e:
-        print(f"Error: {e}")
-        list_interfaces()
-        return
-
-    print("Listening for DHCP requests...")
-    print("Press Ctrl+C to stop\n")
-
-    try:
-        while True:
-            data, client = sock.recvfrom(1024)
-            mac, msg_type, hostname = parse_dhcp_packet(data)
-            if mac is not None and msg_type is not None:
-                print(format_packet_info(mac, msg_type, hostname, client))
-            else:
-                print("Received unparsable packet")
-    except KeyboardInterrupt:
-        print("\n\nZTGateway stopped by user")
-    except Exception as e:
-        print(f"\nUnexpected error: {e}")
-    finally:
-        sock.close()
+    # Выбор интерфейса
+    if args.interface is not None:
+        interface = args.interface
+        print(f"Using interface from command line: {interface}")
+    elif args.non_interactive:
+        interface = DEFAULT_INTERFACE
+        print(f"Non-interactive mode: using '{interface}'")
+    else:
+        interface = interactive_interface_selection()
+    
+    # ... остальной код (создание сокета, цикл и т.д.)
 
 
 if __name__ == "__main__":
