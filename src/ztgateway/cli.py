@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ZTGateway CLI - Zero Touch Provisioning Gateway
-DHCP server for IP phones provisioning
+DHCP server for IP provisioning
 """
 
 import argparse
