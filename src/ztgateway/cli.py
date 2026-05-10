@@ -7,6 +7,8 @@ DHCP server for IP phones provisioning
 import argparse
 import socket
 import sys
+import os
+import subprocess
 from typing import Optional, Tuple
 from .dhcp import parse_dhcp_packet
 
@@ -72,43 +74,177 @@ def list_interfaces() -> None:
             print(f"  {iface} (no IP)")
 
 
-def interactive_interface_selection() -> Optional[str]:
-    """Interactive selection of network interface"""
+def assign_ip_permanent(interface_name: str, ip_cidr: str) -> bool:
+    """
+    Make IP assignment permanent by writing to /etc/network/interfaces
+    Returns True if successful, False otherwise.
+    """
+    # Detect OS (Debian/Ubuntu vs others)
+    try:
+        with open("/etc/os-release") as f:
+            os_info = f.read().lower()
+    except:
+        os_info = ""
+    
+    # For Debian/Ubuntu with ifupdown
+    if os.path.exists("/etc/network/interfaces") and ("debian" in os_info or "ubuntu" in os_info):
+        backup_file = "/etc/network/interfaces.backup.ztgateway"
+        try:
+            # Create backup
+            subprocess.run(["sudo", "cp", "/etc/network/interfaces", backup_file], check=True)
+            
+            # Check if interface already configured
+            with open("/etc/network/interfaces", "r") as f:
+                content = f.read()
+            
+            if f"auto {interface_name}" in content:
+                # Replace existing configuration
+                import re
+                pattern = rf"auto {interface_name}\s+iface {interface_name} inet .*?(?=\n\s*\n|\Z)"
+                new_config = f"auto {interface_name}\niface {interface_name} inet static\n    address {ip_cidr}"
+                new_content = re.sub(pattern, new_config, content, flags=re.DOTALL)
+            else:
+                # Add new configuration
+                new_content = content + f"\n\nauto {interface_name}\niface {interface_name} inet static\n    address {ip_cidr}\n"
+            
+            with open("/etc/network/interfaces", "w") as f:
+                f.write(new_content)
+            
+            # Apply changes
+            subprocess.run(["sudo", "systemctl", "restart", "networking"], check=True)
+            return True
+        except Exception as e:
+            print(f"Failed to make IP permanent: {e}")
+            return False
+    
+    # For systems with netplan (Ubuntu 18.04+)
+    elif os.path.exists("/etc/netplan"):
+        try:
+            netplan_file = None
+            for f in os.listdir("/etc/netplan"):
+                if f.endswith(".yaml") or f.endswith(".yml"):
+                    netplan_file = f"/etc/netplan/{f}"
+                    break
+            
+            if netplan_file:
+                import yaml
+                with open(netplan_file, "r") as f:
+                    config = yaml.safe_load(f)
+                
+                # Simplified: just create a new netplan config for the interface
+                netplan_config = {
+                    "network": {
+                        "version": 2,
+                        "renderer": "networkd",
+                        "ethernets": {
+                            interface_name: {
+                                "addresses": [ip_cidr],
+                                "dhcp4": False
+                            }
+                        }
+                    }
+                }
+                
+                with open(f"/etc/netplan/99-ztgateway-{interface_name}.yaml", "w") as f:
+                    yaml.dump(netplan_config, f)
+                
+                subprocess.run(["sudo", "netplan", "apply"], check=True)
+                return True
+        except Exception as e:
+            print(f"Failed to configure netplan: {e}")
+            return False
+    
+    print("Warning: Could not make IP permanent (unsupported OS). IP will be temporary.")
+    return False
+
+
+def interactive_interface_selection() -> Optional[Tuple[str, str]]:
+    """
+    Interactive selection of network interface with optional IP assignment.
+    Returns (interface_name, assigned_ip) or None if cancelled.
+    assigned_ip may be empty string if not applicable.
+    """
     netifaces = _get_netifaces()
     if netifaces is None:
         print("netifaces not installed. Using default 'all'.")
-        return DEFAULT_INTERFACE
+        return (DEFAULT_INTERFACE, "")
     
     interfaces = []
-    print("\nAvailable network interfaces:")
+    print("\n" + "="*60)
+    print("Available Network Interfaces")
+    print("="*60)
+    
     for iface in netifaces.interfaces():
         ip = get_interface_ip(iface)
         if ip:
-            print(f"  {len(interfaces)+1}) {iface} (IP: {ip})")
-            interfaces.append(iface)
+            print(f"  {len(interfaces)+1:2d}) {iface:20s} | Current IP: {ip:15s} | Active")
+            interfaces.append({"name": iface, "ip": ip, "status": "active"})
         else:
-            print(f"  {iface} (no IP) - skipped")
+            print(f"  {len(interfaces)+1:2d}) {iface:20s} | No IP assigned          | Inactive")
+            interfaces.append({"name": iface, "ip": None, "status": "inactive"})
     
-    if not interfaces:
-        print("No interfaces with IP found. Using 'all'.")
-        return DEFAULT_INTERFACE
-    
-    print(f"  {len(interfaces)+1}) all (listen on all interfaces)")
-    print(f"  {len(interfaces)+2}) Exit")
+    print("="*60)
+    print(f"  {len(interfaces)+1:2d}) all (listen on ALL interfaces)")
+    print(f"  {len(interfaces)+2:2d}) Exit without starting")
+    print("="*60)
     
     while True:
         try:
             choice = input(f"\nSelect interface (1-{len(interfaces)+2}): ").strip()
+            
             if choice == str(len(interfaces)+2):
                 return None
             if choice == str(len(interfaces)+1):
-                return DEFAULT_INTERFACE
+                return (DEFAULT_INTERFACE, "")
+            
             idx = int(choice) - 1
             if 0 <= idx < len(interfaces):
-                return interfaces[idx]
+                selected = interfaces[idx]
+                final_ip = selected["ip"] if selected["ip"] else ""
+                
+                # Ask if user wants to change/assign IP
+                if selected["ip"]:
+                    print(f"\nInterface '{selected['name']}' has IP: {selected['ip']}")
+                    change = input("Do you want to change it? (y/N): ").strip().lower()
+                    if change == 'y':
+                        selected["ip"] = None  # Force manual assignment
+                        final_ip = ""
+                
+                if selected["ip"] is None:
+                    print(f"\nConfiguring IP for '{selected['name']}'")
+                    print("Example: 192.168.100.1/24")
+                    ip_cidr = input("Enter IP address (CIDR format): ").strip()
+                    if not ip_cidr:
+                        print("No IP provided. Skipping this interface.")
+                        continue
+                    
+                    # Assign IP temporarily
+                    try:
+                        # Flush existing IP if any
+                        subprocess.run(["sudo", "ip", "addr", "flush", "dev", selected["name"]], 
+                                     stderr=subprocess.DEVNULL, check=False)
+                        # Add new IP
+                        subprocess.run(["sudo", "ip", "addr", "add", ip_cidr, "dev", selected["name"]], check=True)
+                        subprocess.run(["sudo", "ip", "link", "set", selected["name"], "up"], check=True)
+                        print(f"✅ IP {ip_cidr} assigned temporarily to {selected['name']}")
+                        final_ip = ip_cidr.split('/')[0]
+                        
+                        # Ask to make permanent
+                        permanent = input("Make this IP permanent? (y/N): ").strip().lower()
+                        if permanent == 'y':
+                            if assign_ip_permanent(selected["name"], ip_cidr):
+                                print(f"✅ IP {ip_cidr} configured permanently")
+                            else:
+                                print("⚠️  Could not make IP permanent. It will be temporary.")
+                    except subprocess.CalledProcessError as e:
+                        print(f"❌ Failed to assign IP: {e}")
+                        continue
+                
+                return (selected["name"], final_ip)
+            
             print(f"Invalid choice. Enter 1-{len(interfaces)+2}")
         except ValueError:
-            print(f"Please enter a number (1-{len(interfaces)+2})")
+            print(f"Please enter a valid number (1-{len(interfaces)+2})")
         except KeyboardInterrupt:
             print("\n")
             return None
@@ -198,7 +334,7 @@ def main() -> None:
         list_interfaces()
         return
 
-    # Выбор интерфейса
+    # Выбор интерфейса (интерактивный или через аргументы)
     if args.interface is not None:
         interface = args.interface
         print(f"Using interface from command line: {interface}")
@@ -206,10 +342,14 @@ def main() -> None:
         interface = DEFAULT_INTERFACE
         print(f"Non-interactive mode: using '{interface}'")
     else:
-        interface = interactive_interface_selection()
-        if interface is None:
+        result = interactive_interface_selection()
+        if result is None:
             print("No interface selected. Exiting.")
             return
+        interface, assigned_ip = result
+        print(f"Selected interface: {interface}")
+        if assigned_ip:
+            print(f"Using IP: {assigned_ip}")
 
     print(f"ZTGateway – starting on interface: {interface}, port {args.port}")
 

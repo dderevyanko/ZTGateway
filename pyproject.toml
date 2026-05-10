@@ -4,9 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ztgateway"
-version = "0.2.0"
+version = "0.3.0"
 description = "Zero Touch Provisioning Gateway"
 authors = [{name = "Danila Derevyanko"}]
+dependencies = [
+    "netifaces>=0.11.0",
+    "redis>=4.5.0",
+    "pyyaml>=6.0",
+]
 
 [project.scripts]
 ztgateway = "ztgateway.cli:main"
