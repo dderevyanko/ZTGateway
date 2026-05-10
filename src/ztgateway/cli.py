@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ZTGateway CLI - Zero Touch Provisioning Gateway
-DHCP server for IP provisioning
+DHCP server for IP phones provisioning
 """
 
 import argparse
@@ -72,6 +72,48 @@ def list_interfaces() -> None:
             print(f"  {iface} (no IP)")
 
 
+def interactive_interface_selection() -> Optional[str]:
+    """Interactive selection of network interface"""
+    netifaces = _get_netifaces()
+    if netifaces is None:
+        print("netifaces not installed. Using default 'all'.")
+        return DEFAULT_INTERFACE
+    
+    interfaces = []
+    print("\nAvailable network interfaces:")
+    for iface in netifaces.interfaces():
+        ip = get_interface_ip(iface)
+        if ip:
+            print(f"  {len(interfaces)+1}) {iface} (IP: {ip})")
+            interfaces.append(iface)
+        else:
+            print(f"  {iface} (no IP) - skipped")
+    
+    if not interfaces:
+        print("No interfaces with IP found. Using 'all'.")
+        return DEFAULT_INTERFACE
+    
+    print(f"  {len(interfaces)+1}) all (listen on all interfaces)")
+    print(f"  {len(interfaces)+2}) Exit")
+    
+    while True:
+        try:
+            choice = input(f"\nSelect interface (1-{len(interfaces)+2}): ").strip()
+            if choice == str(len(interfaces)+2):
+                return None
+            if choice == str(len(interfaces)+1):
+                return DEFAULT_INTERFACE
+            idx = int(choice) - 1
+            if 0 <= idx < len(interfaces):
+                return interfaces[idx]
+            print(f"Invalid choice. Enter 1-{len(interfaces)+2}")
+        except ValueError:
+            print(f"Please enter a number (1-{len(interfaces)+2})")
+        except KeyboardInterrupt:
+            print("\n")
+            return None
+
+
 def create_socket(interface_name: str, port: int, rcvbuf: int) -> socket.socket:
     """Create and bind socket to specified interface"""
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -98,47 +140,26 @@ def create_socket(interface_name: str, port: int, rcvbuf: int) -> socket.socket:
 def format_packet_info(
     mac: str, msg_type: int, hostname: Optional[str], client: Tuple[str, int]
 ) -> str:
-    """Format packet information for logging"""
+    """
+    Format packet information for logging.
+    
+    The `client` tuple comes from socket.recvfrom() and contains (source_ip, source_port).
+    
+    IMPORTANT:
+    - DHCPDISCOVER is always sent from 0.0.0.0 (source_ip = '0.0.0.0')
+      because the client has no IP address yet.
+    - Source port is typically 68 (client DHCP port).
+    
+    Example: src=('0.0.0.0', 68) means: client has no IP, expects response on port 68.
+    
+    This is NORMAL behavior for a DHCPDISCOVER packet, NOT an error.
+    """
     msg_name = DHCP_MSG_NAMES.get(msg_type, f"UNKNOWN({msg_type})")
     base = f"Received from {mac}, type={msg_name}"
     if hostname:
         base += f", hostname={hostname}"
     return f"{base}, src={client}"
 
-def interactive_interface_selection() -> str:
-    """Interactive selection of network interface"""
-    netifaces = _get_netifaces()
-    if netifaces is None:
-        print("netifaces not installed. Using default 'all'.")
-        return "all"
-    
-    interfaces = []
-    print("\nAvailable network interfaces:")
-    for iface in netifaces.interfaces():
-        ip = get_interface_ip(iface)
-        if ip:
-            print(f"  {len(interfaces)+1}) {iface} (IP: {ip})")
-            interfaces.append(iface)
-        else:
-            print(f"  {iface} (no IP) - skipped")
-    
-    if not interfaces:
-        print("No interfaces with IP found. Using 'all'.")
-        return "all"
-    
-    print(f"  {len(interfaces)+1}) all (listen on all interfaces)")
-    
-    while True:
-        try:
-            choice = input(f"\nSelect interface (1-{len(interfaces)+1}): ").strip()
-            if choice == str(len(interfaces)+1):
-                return "all"
-            idx = int(choice) - 1
-            if 0 <= idx < len(interfaces):
-                return interfaces[idx]
-            print(f"Invalid choice. Enter 1-{len(interfaces)+1}")
-        except ValueError:
-            print(f"Please enter a number (1-{len(interfaces)+1})")
 
 def main() -> None:
     parser = argparse.ArgumentParser(
