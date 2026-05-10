@@ -1,11 +1,16 @@
 # Python
 __pycache__/
 *.py[cod]
-*.so
-.Python
-env/
+*.pyo
+*.egg-info/
+*.egg
+.eggs/
 venv/
-.venv/
+.env
+.envrc
+.pytest_cache/
+.coverage
+htmlcov/
 
 # IDE
 .vscode/
@@ -13,22 +18,20 @@ venv/
 *.swp
 *.swo
 
-# Логи и данные
+# Logs
 *.log
 *.db
 *.db-journal
-/srv/
-
-# Конфиги с паролями
-.env
-*.key
-*.pem
-*.crt
-config/local.yaml
+/srv/tftp/
 
 # OS
 .DS_Store
 Thumbs.db
-venv/
+
+# Local scripts
 run.sh
-*.egg-info/
+local_config.yaml
+config/local.yaml
+
+# Redis
+dump.rdb
